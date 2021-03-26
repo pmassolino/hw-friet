@@ -8,7 +8,7 @@
 /*--------------------------------------------------------------------------------*/
 `timescale 1ns / 1ps
 
-module tb_friet_pc_rounds_simple
+module tb_friet_p_rounds_simple_fpga_lut4
 #(parameter PERIOD = 1000,
 parameter ASYNC_RSTN = 0,  // 0 - Synchronous reset in high, 1 - Asynchrouns reset in low.
 parameter maximum_line_length = 10000,
@@ -46,6 +46,7 @@ wire test_dout_valid;
 reg test_dout_ready;
 wire [4:0] test_dout_size;
 wire test_dout_last;
+wire test_fault_detected;
 
 reg clk;
 reg test_error = 1'b0;
@@ -54,7 +55,7 @@ reg test_verification = 1'b0;
 localparam tb_delay = PERIOD/2;
 localparam tb_delay_read = 3*PERIOD/4;
 
-friet_pc_rounds_simple
+friet_p_rounds_simple_fpga_lut4
 test
 (
     .clk(clk),
@@ -69,7 +70,8 @@ test
     .dout_valid(test_dout_valid),
     .dout_ready(test_dout_ready),
     .dout_size(test_dout_size),
-    .dout_last(test_dout_last)
+    .dout_last(test_dout_last),
+    .fault_detected(test_fault_detected)
 );
 
 initial begin : clock_generator
@@ -838,9 +840,9 @@ generate
 if(sim_enable_dump == 1'b1) begin
     initial
     begin
-        $dumpfile("tb_friet_pc_rounds_simple_dump");
-        $dumpvars(1, tb_friet_pc_rounds_simple);
-        $dumpvars(1, tb_friet_pc_rounds_simple.test);
+        $dumpfile("tb_friet_p_rounds_simple_fpga_lut4_dump");
+        $dumpvars(1, tb_friet_p_rounds_simple_fpga_lut4);
+        $dumpvars(1, tb_friet_p_rounds_simple_fpga_lut4.test);
     end
 end
 endgenerate

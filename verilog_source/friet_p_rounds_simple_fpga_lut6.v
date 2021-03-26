@@ -10,7 +10,7 @@
 
 /* verilator lint_off UNOPTFLAT */
 
-module friet_pc_rounds_simple
+module friet_p_rounds_simple_fpga_lut6
 #(parameter ASYNC_RSTN = 0,// 0 - Synchronous reset in high, 1 - Asynchrouns reset in low.
 parameter COMBINATIONAL_ROUNDS = 1 // The number of unrolled rounds in the Friet permutation (Values allowed : 1,2,3,4,6,8,12)
 )
@@ -27,42 +27,11 @@ parameter COMBINATIONAL_ROUNDS = 1 // The number of unrolled rounds in the Friet
     output wire dout_valid,
     input wire dout_ready,
     output wire [4:0] dout_size,
-    output wire dout_last
+    output wire dout_last,
+    output wire fault_detected
 );
 
-reg int_din_ready;
-wire int_dout_valid;
-
-reg padding_bit_b;
-reg [129:0] din_padding;
-reg [127:0] din_mask;
-wire [127:0] din_masked;
-wire [129:0] din_padding_xor_state;
-wire [127:0] din_xor_state_masked;
-wire [129:0] din_absorb_enc;
-wire [129:0] din_absorb_dec;
-
-reg [127:0] reg_dout, next_dout;
-reg [4:0] reg_dout_size, next_dout_size;
-reg reg_dout_last, next_dout_last;
-
-reg [383:0] reg_state, next_state;
-
-reg [383:0] friet_pc_round_state_initial;
-wire [383:0] friet_pc_round_state[0:(COMBINATIONAL_ROUNDS-1)];
-wire [383:0] friet_pc_round_new_state[0:(COMBINATIONAL_ROUNDS-1)];
-reg [4:0] friet_pc_round_rc_initial;
-wire [4:0] friet_pc_round_rc[0:(COMBINATIONAL_ROUNDS-1)];
-wire [4:0] friet_pc_round_new_rc[0:(COMBINATIONAL_ROUNDS-1)];
-
-reg [4:0] reg_friet_pc_round_rc, next_friet_pc_round_rc;
-
-wire din_valid_and_ready;
-wire dout_valid_and_ready;
-reg reg_computing_permutation, next_computing_permutation;
-reg reg_has_data_out, next_has_data_out;
-
-localparam [4:0] master_round_constant = 5'b01111;
+localparam [4:0] master_round_constant  = 5'b01111;
 localparam [4:0] last_round_constant_23 = 5'b11001;
 localparam [4:0] last_round_constant_22 = 5'b01100;
 localparam [4:0] last_round_constant_21 = 5'b10110;
@@ -79,6 +48,46 @@ localparam [4:0] last_round_constant = (COMBINATIONAL_ROUNDS == 1)  ? last_round
                                        (COMBINATIONAL_ROUNDS == 12) ? last_round_constant_12 :
                                        master_round_constant;
 
+reg int_din_ready;
+wire int_dout_valid;
+
+reg padding_bit_b;
+reg [129:0] din_padding;
+reg [127:0] din_padding_parity;
+reg [127:0] din_mask;
+wire [129:0] din_padding_xor_state;
+wire [127:0] din_xor_state_masked;
+wire [129:0] din_absorb_enc_dec;
+
+wire is_oper_dec;
+
+(* dont_touch = "yes" *) wire [127:0] din_absorb_enc_dec_parity;
+
+reg [127:0] reg_dout, next_dout;
+reg [4:0] reg_dout_size, next_dout_size;
+reg reg_dout_last, next_dout_last;
+
+(* dont_touch = "yes" *) reg [511:0] reg_state, next_state;
+
+(* dont_touch = "yes" *) wire [511:0] friet_p_round_state[0:(COMBINATIONAL_ROUNDS-1)];
+(* dont_touch = "yes" *) wire [511:0] friet_p_round_new_state[0:(COMBINATIONAL_ROUNDS-1)];
+(* dont_touch = "yes" *) wire [4:0] friet_p_round_rc_c[0:(COMBINATIONAL_ROUNDS-1)];
+(* dont_touch = "yes" *) wire [4:0] friet_p_round_rc_d[0:(COMBINATIONAL_ROUNDS-1)];
+(* dont_touch = "yes" *) wire [4:0] friet_p_round_new_rc_c[0:(COMBINATIONAL_ROUNDS-1)];
+(* dont_touch = "yes" *) wire [4:0] friet_p_round_new_rc_d[0:(COMBINATIONAL_ROUNDS-1)];
+
+(* dont_touch = "yes" *) reg [4:0] reg_friet_p_round_rc_c, next_friet_p_round_rc_c;
+(* dont_touch = "yes" *) reg [4:0] reg_friet_p_round_rc_d, next_friet_p_round_rc_d;
+
+(* dont_touch = "yes" *) reg reg_fault_detected, next_fault_detected;
+(* dont_touch = "yes" *) wire [127:0] computed_parity;
+(* dont_touch = "yes" *) wire internal_new_fault_detected;
+
+wire din_valid_and_ready;
+wire dout_valid_and_ready;
+reg reg_computing_permutation, next_computing_permutation;
+reg reg_has_data_out, next_has_data_out;
+
 assign din_valid_and_ready = din_valid & int_din_ready;
 assign dout_valid_and_ready = int_dout_valid & dout_ready;
 
@@ -88,11 +97,15 @@ generate
             if (arstn == 1'b0) begin
                 reg_computing_permutation <= 1'b0;
                 reg_has_data_out <= 1'b0;
-                reg_friet_pc_round_rc <= last_round_constant;
+                reg_friet_p_round_rc_c <= last_round_constant;
+                reg_friet_p_round_rc_d <= last_round_constant;
+                reg_fault_detected <= 1'b0;
             end else begin
                 reg_computing_permutation <= next_computing_permutation;
                 reg_has_data_out <= next_has_data_out;
-                reg_friet_pc_round_rc <= next_friet_pc_round_rc;
+                reg_friet_p_round_rc_c <= next_friet_p_round_rc_c;
+                reg_friet_p_round_rc_d <= next_friet_p_round_rc_d;
+                reg_fault_detected <= next_fault_detected;
             end
         end
     end else begin
@@ -100,11 +113,15 @@ generate
             if (arstn == 1'b1) begin
                 reg_computing_permutation <= 1'b0;
                 reg_has_data_out <= 1'b0;
-                reg_friet_pc_round_rc <= last_round_constant;
+                reg_friet_p_round_rc_c <= last_round_constant;
+                reg_friet_p_round_rc_d <= last_round_constant;
+                reg_fault_detected <= 1'b0;
             end else begin
                 reg_computing_permutation <= next_computing_permutation;
                 reg_has_data_out <= next_has_data_out;
-                reg_friet_pc_round_rc <= next_friet_pc_round_rc;
+                reg_friet_p_round_rc_c <= next_friet_p_round_rc_c;
+                reg_friet_p_round_rc_d <= next_friet_p_round_rc_d;
+                reg_fault_detected <= next_fault_detected;
             end
         end
     end
@@ -122,26 +139,26 @@ always @(*) begin
         case (oper)
             // Absorb encryption, Absorb decryption, Squeeze and permute, Absorb directly, Absorb encryption no output, Absorb decryption no output
             3'b001, 3'b010, 3'b011, 3'b100, 3'b101, 3'b110 : begin
-                next_state = friet_pc_round_new_state[COMBINATIONAL_ROUNDS-1];
+                next_state = friet_p_round_new_state[COMBINATIONAL_ROUNDS-1];
             end
             // Init state
             3'b000 : begin
-                next_state = {384{1'b0}};
+                next_state = {512{1'b0}};
             end
             // Reserved
             3'b111 : begin
                 next_state = reg_state;
             end
             default : begin
-                next_state = {384{1'bx}};
+                next_state = {512{1'bx}};
             end
         endcase
     end else if((din_valid_and_ready == 1'b0) && (reg_computing_permutation == 1'b1)) begin
-        next_state = friet_pc_round_new_state[COMBINATIONAL_ROUNDS-1];
+        next_state = friet_p_round_new_state[COMBINATIONAL_ROUNDS-1];
     end else if((din_valid_and_ready == 1'b0) && (reg_computing_permutation == 1'b0)) begin
         next_state = reg_state;
     end else begin
-        next_state = {384{1'bx}};
+        next_state = {512{1'bx}};
     end
 end
 
@@ -187,6 +204,8 @@ always @(*) begin
             din_padding[7:0]     = {7'b0000001,padding_bit_b};
             din_padding[129:8]   = {122{1'b0}};
             din_mask[127:0]      = {16{8'h00}};
+            din_padding_parity[1:0] = {1'b1,padding_bit_b};
+            din_padding_parity[127:2] = {126{1'b0}};
         end                     
         5'b00001 : begin        
             din_padding[7:0]     = {8{1'b0}};
@@ -194,6 +213,9 @@ always @(*) begin
             din_padding[129:16]  = {114{1'b0}};
             din_mask[7:0]        = {1{8'hFF}};
             din_mask[127:8]      = {15{8'h00}};
+            din_padding_parity[7:0] = {8{1'b0}};
+            din_padding_parity[9:8] = {1'b1,padding_bit_b};
+            din_padding_parity[127:10] = {118{1'b0}};
         end                     
         5'b00010 : begin        
             din_padding[15:0]    = {16{1'b0}};
@@ -201,6 +223,9 @@ always @(*) begin
             din_padding[129:24]  = {106{1'b0}};
             din_mask[15:0]       = {2{8'hFF}};
             din_mask[127:16]     = {14{8'h00}};
+            din_padding_parity[15:0]   = {16{1'b0}};
+            din_padding_parity[17:16]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:18] = {110{1'b0}};
         end                     
         5'b00011 : begin        
             din_padding[23:0]    = {24{1'b0}};
@@ -208,6 +233,9 @@ always @(*) begin
             din_padding[129:32]  = {98{1'b0}};
             din_mask[23:0]       = {3{8'hFF}};
             din_mask[127:24]     = {13{8'h00}};
+            din_padding_parity[23:0]   = {24{1'b0}};
+            din_padding_parity[25:24]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:26] = {102{1'b0}};
         end                     
         5'b00100 : begin        
             din_padding[31:0]    = {32{1'b0}};
@@ -215,6 +243,9 @@ always @(*) begin
             din_padding[129:40]  = {90{1'b0}};
             din_mask[31:0]       = {4{8'hFF}};
             din_mask[127:32]     = {12{8'h00}};
+            din_padding_parity[31:0]   = {32{1'b0}};
+            din_padding_parity[33:32]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:34] = {94{1'b0}};
         end                     
         5'b00101 : begin        
             din_padding[39:0]    = {40{1'b0}};
@@ -222,6 +253,9 @@ always @(*) begin
             din_padding[129:48]  = {82{1'b0}};
             din_mask[39:0]       = {5{8'hFF}};
             din_mask[127:40]     = {11{8'h00}};
+            din_padding_parity[39:0]   = {40{1'b0}};
+            din_padding_parity[41:40]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:42] = {86{1'b0}};
         end                     
         5'b00110 : begin        
             din_padding[47:0]    = {48{1'b0}};
@@ -229,6 +263,9 @@ always @(*) begin
             din_padding[129:56]  = {74{1'b0}};
             din_mask[47:0]       = {6{8'hFF}};
             din_mask[127:48]     = {10{8'h00}};
+            din_padding_parity[47:0]   = {48{1'b0}};
+            din_padding_parity[49:48]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:50] = {78{1'b0}};
         end                     
         5'b00111 : begin        
             din_padding[55:0]    = {56{1'b0}};
@@ -236,6 +273,9 @@ always @(*) begin
             din_padding[129:64]  = {66{1'b0}};
             din_mask[55:0]       = {7{8'hFF}};
             din_mask[127:56]     = {9{8'h00}};
+            din_padding_parity[55:0]   = {56{1'b0}};
+            din_padding_parity[57:56]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:58] = {70{1'b0}};
         end                     
         5'b01000 : begin        
             din_padding[63:0]    = {64{1'b0}};
@@ -243,6 +283,9 @@ always @(*) begin
             din_padding[129:72]  = {58{1'b0}};
             din_mask[63:0]       = {8{8'hFF}};
             din_mask[127:64]     = {8{8'h00}};
+            din_padding_parity[63:0]   = {64{1'b0}};
+            din_padding_parity[65:64]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:66] = {62{1'b0}};
         end                     
         5'b01001 : begin        
             din_padding[71:0]    = {72{1'b0}};
@@ -250,6 +293,9 @@ always @(*) begin
             din_padding[129:80]  = {50{1'b0}};
             din_mask[71:0]       = {9{8'hFF}};
             din_mask[127:72]     = {7{8'h00}};
+            din_padding_parity[71:0]   = {72{1'b0}};
+            din_padding_parity[73:72]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:74] = {54{1'b0}};
         end                     
         5'b01010 : begin        
             din_padding[79:0]    = {80{1'b0}};
@@ -257,6 +303,9 @@ always @(*) begin
             din_padding[129:88]  = {42{1'b0}};
             din_mask[79:0]       = {10{8'hFF}};
             din_mask[127:80]     = {6{8'h00}};
+            din_padding_parity[79:0]   = {80{1'b0}};
+            din_padding_parity[81:80]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:82] = {46{1'b0}};
         end                     
         5'b01011 : begin        
             din_padding[87:0]    = {88{1'b0}};
@@ -264,6 +313,9 @@ always @(*) begin
             din_padding[129:96]  = {34{1'b0}};
             din_mask[87:0]       = {11{8'hFF}};
             din_mask[127:88]     = {5{8'h00}};
+            din_padding_parity[87:0]   = {88{1'b0}};
+            din_padding_parity[89:88]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:90] = {38{1'b0}};
         end
         5'b01100 : begin
             din_padding[95:0]    = {96{1'b0}};
@@ -271,6 +323,9 @@ always @(*) begin
             din_padding[129:104] = {26{1'b0}};
             din_mask[95:0]       = {12{8'hFF}};
             din_mask[127:96]     = {4{8'h00}};
+            din_padding_parity[95:0]   = {96{1'b0}};
+            din_padding_parity[97:96]  = {1'b1,padding_bit_b};
+            din_padding_parity[127:98] = {30{1'b0}};
         end
         5'b01101 : begin
             din_padding[103:0]    = {104{1'b0}};
@@ -278,6 +333,9 @@ always @(*) begin
             din_padding[129:112]  = {18{1'b0}};
             din_mask[103:0]       = {13{8'hFF}};
             din_mask[127:104]     = {3{8'h00}};
+            din_padding_parity[103:0]   = {104{1'b0}};
+            din_padding_parity[105:104] = {1'b1,padding_bit_b};
+            din_padding_parity[127:106] = {22{1'b0}};
         end
         5'b01110 : begin
             din_padding[111:0]    = {112{1'b0}};
@@ -285,6 +343,9 @@ always @(*) begin
             din_padding[129:120]  = {10{1'b0}};
             din_mask[111:0]       = {14{8'hFF}};
             din_mask[127:112]     = {2{8'h00}};
+            din_padding_parity[111:0]   = {112{1'b0}};
+            din_padding_parity[113:112] = {1'b1,padding_bit_b};
+            din_padding_parity[127:114] = {14{1'b0}};
         end
         5'b01111 : begin
             din_padding[119:0]    = {120{1'b0}};
@@ -292,146 +353,136 @@ always @(*) begin
             din_padding[129:128]  = {2{1'b0}};
             din_mask[119:0]       = {15{8'hFF}};
             din_mask[127:120]     = {1{8'h00}};
+            din_padding_parity[119:0]   = {120{1'b0}};
+            din_padding_parity[121:120] = {1'b1,padding_bit_b};
+            din_padding_parity[127:122] = {6{1'b0}};
         end
         5'b10000 : begin
             din_padding[129:0]    = {{1'b1},padding_bit_b,{128{1'b0}}};
             din_mask[127:0]       = {16{8'hFF}};
+            din_padding_parity[1:0] = {1'b1,padding_bit_b};
+            din_padding_parity[127:2] = {126{1'b0}};
         end
         5'b10001,5'b10010,5'b10011,5'b10100,5'b10101,5'b10110,5'b10111,5'b11000,5'b11001,5'b11010,5'b11011,5'b11100,5'b11101,5'b11110,5'b11111 : begin
             din_padding[129:0]    = {{1'b1},padding_bit_b,{128{1'b0}}};
             din_mask[127:0]       = {16{8'hFF}};
+            din_padding_parity[1:0] = {1'b1,padding_bit_b};
+            din_padding_parity[127:2] = {126{1'b0}};
         end
         default : begin
             din_padding[129:0]    = {130{1'bx}};
             din_mask[127:0]       = {128{1'bx}};
+            din_padding_parity[127:0] = {128{1'bx}};
         end
     endcase
 end
 
-assign din_masked = din & din_mask;
 assign din_padding_xor_state = din_padding ^ reg_state[129:0];
 assign din_xor_state_masked = (din ^ reg_state[127:0]) & din_mask;
-assign din_absorb_enc = {2'b00,din_masked} ^ din_padding_xor_state;
-assign din_absorb_dec = {2'b00,din_xor_state_masked} ^ din_padding_xor_state;
 
-always @(*) begin
-    if(din_valid_and_ready == 1'b1) begin
-        case (oper)
-            // Absorb encryption, Absorb decryption, Squeeze and permute, Absorb directly, Absorb encryption no output, Absorb decryption no output
-            3'b001, 3'b010, 3'b011, 3'b100, 3'b101,3'b110  : begin
-                if((oper == 3'b010) || (oper == 3'b110)) begin
-                    friet_pc_round_state_initial[129:0]   = din_absorb_dec;
-                end else begin
-                    friet_pc_round_state_initial[129:0]   = din_absorb_enc;
-                end
-                friet_pc_round_state_initial[383:130] = reg_state[383:130];
-            end
-            // Init State
-            3'b000 : begin
-                friet_pc_round_state_initial = reg_state;
-            end
-            // Reserved
-            3'b111 : begin
-                friet_pc_round_state_initial = reg_state;
-            end
-            default : begin
-                friet_pc_round_state_initial = {384{1'bx}};
-            end
-        endcase
-    end else if(din_valid_and_ready == 1'b0) begin
-        friet_pc_round_state_initial = reg_state;
-    end else begin
-        friet_pc_round_state_initial = {384{1'bx}};
-    end
-end
+assign is_oper_dec = ((oper == 3'b010) || (oper == 3'b110)) ? 1'b1 :
+                     ((oper != 3'b010) && (oper != 3'b110)) ? 1'b0 :
+                     1'bx;
+
+assign din_absorb_enc_dec = (is_oper_dec == 1'b0) ? ({2'b00,(din & din_mask)} ^ (din_padding_xor_state)):
+                            (is_oper_dec == 1'b1) ? ({2'b00,((din ^ reg_state[127:0]) & din_mask)} ^ (din_padding_xor_state)):
+                            {130{1'bx}};
+
+assign din_absorb_enc_dec_parity = (is_oper_dec == 1'b0) ? ((din & din_mask) ^ (din_padding_parity ^ reg_state[511:384])):
+                                   (is_oper_dec == 1'b1) ? (((din ^ reg_state[127:0]) & din_mask) ^ (din_padding_parity ^ reg_state[511:384])):
+                                   {128{1'bx}};
 
 always @(*) begin
     if(din_valid_and_ready == 1'b1) begin
         case (oper)
             // Absorb encryption, Absorb decryption, Squeeze and permute, Absorb directly, Absorb encryption no output, Absorb decryption no output
             3'b001, 3'b010, 3'b011, 3'b100, 3'b101,3'b110 : begin
-                next_friet_pc_round_rc = friet_pc_round_new_rc[COMBINATIONAL_ROUNDS-1];
+                next_friet_p_round_rc_c = friet_p_round_new_rc_c[COMBINATIONAL_ROUNDS-1];
+                next_friet_p_round_rc_d = friet_p_round_new_rc_d[COMBINATIONAL_ROUNDS-1];
             end
             // Init State
             3'b000 : begin 
-                next_friet_pc_round_rc = reg_friet_pc_round_rc;
+                next_friet_p_round_rc_c = reg_friet_p_round_rc_c;
+                next_friet_p_round_rc_d = reg_friet_p_round_rc_d;
             end
             // Reserved
             3'b111 : begin 
-                next_friet_pc_round_rc = reg_friet_pc_round_rc;
+                next_friet_p_round_rc_c = reg_friet_p_round_rc_c;
+                next_friet_p_round_rc_d = reg_friet_p_round_rc_d;
             end
             default : begin
-                next_friet_pc_round_rc = {5{1'bx}};
+                next_friet_p_round_rc_c = {5{1'bx}};
+                next_friet_p_round_rc_d = {5{1'bx}};
             end
         endcase
     end else if((din_valid_and_ready == 1'b0) && (reg_computing_permutation == 1'b1)) begin
-        next_friet_pc_round_rc = friet_pc_round_new_rc[COMBINATIONAL_ROUNDS-1];
+        next_friet_p_round_rc_c = friet_p_round_new_rc_c[COMBINATIONAL_ROUNDS-1];
+        next_friet_p_round_rc_d = friet_p_round_new_rc_d[COMBINATIONAL_ROUNDS-1];
     end else if((din_valid_and_ready == 1'b0) && (reg_computing_permutation == 1'b0)) begin
-        next_friet_pc_round_rc = reg_friet_pc_round_rc;
+        next_friet_p_round_rc_c = reg_friet_p_round_rc_c;
+        next_friet_p_round_rc_d = reg_friet_p_round_rc_d;
     end else begin
-        next_friet_pc_round_rc = {5{1'bx}};
-    end
-end
-
-always @(*) begin
-    if(din_valid_and_ready == 1'b1) begin
-        case (oper)
-            // Absorb encryption, Absorb decryption, Squeeze and permute, Absorb directly, Absorb encryption no output, Absorb decryption no output
-            3'b001, 3'b010, 3'b011, 3'b100, 3'b101,3'b110 : begin
-                friet_pc_round_rc_initial = master_round_constant;
-            end
-            // Init State, Squeeze
-            3'b000 : begin 
-                friet_pc_round_rc_initial = reg_friet_pc_round_rc;
-            end
-            // Reserved
-            3'b111 : begin 
-                friet_pc_round_rc_initial = reg_friet_pc_round_rc;
-            end
-            default : begin
-                friet_pc_round_rc_initial = {5{1'bx}};
-            end
-        endcase
-    end else if(din_valid_and_ready == 1'b0) begin
-        friet_pc_round_rc_initial = reg_friet_pc_round_rc;
-    end else begin
-        friet_pc_round_rc_initial = {5{1'bx}};
+        next_friet_p_round_rc_c = {5{1'bx}};
+        next_friet_p_round_rc_d = {5{1'bx}};
     end
 end
 
 reg is_last_rc;
 
 always @(*) begin
-    if(reg_friet_pc_round_rc == last_round_constant) begin
+    if(reg_friet_p_round_rc_c == last_round_constant) begin
         is_last_rc = 1'b1;
-    end else if(reg_friet_pc_round_rc != last_round_constant) begin
+    end else if(reg_friet_p_round_rc_c != last_round_constant) begin
         is_last_rc = 1'b0;
     end else begin
         is_last_rc = 1'bx;
     end
 end
 
-assign friet_pc_round_state[0] = friet_pc_round_state_initial;
-assign friet_pc_round_rc[0] = friet_pc_round_rc_initial;
+assign friet_p_round_state[0] = (din_valid_and_ready == 1'b0) ? reg_state : // No valid input
+                                ((din_valid_and_ready == 1'b1) && (oper == 3'b000)) ? reg_state : // Init State
+                                ((din_valid_and_ready == 1'b1) && (oper == 3'b111)) ? reg_state : // Reserved
+                                ((din_valid_and_ready == 1'b1) && ((oper == 3'b001) || (oper == 3'b010) || (oper == 3'b011) || (oper == 3'b100) || (oper == 3'b101) || (oper == 3'b110))) ? {din_absorb_enc_dec_parity,reg_state[383:130],din_absorb_enc_dec} : // Absorb encryption, Absorb decryption, Squeeze and permute, Absorb directly, Absorb encryption no output, Absorb decryption no output
+                                {512{1'bx}}; // Unknown value
+                                
+assign friet_p_round_rc_c[0] =  (din_valid_and_ready == 1'b0) ? reg_friet_p_round_rc_c : // No valid input
+                                ((din_valid_and_ready == 1'b1) && (oper == 3'b000)) ? reg_friet_p_round_rc_c : // Init State
+                                ((din_valid_and_ready == 1'b1) && (oper == 3'b111)) ? reg_friet_p_round_rc_c : // Reserved
+                                ((din_valid_and_ready == 1'b1) && ((oper == 3'b001) || (oper == 3'b010) || (oper == 3'b011) || (oper == 3'b100) || (oper == 3'b101) || (oper == 3'b110))) ? master_round_constant : // Absorb encryption, Absorb decryption, Squeeze and permute, Absorb directly, Absorb encryption no output, Absorb decryption no output
+                                {5{1'bx}}; // Unknown value
+                                
+assign friet_p_round_rc_d[0] = (din_valid_and_ready == 1'b0) ? reg_friet_p_round_rc_d : // No valid input
+                                ((din_valid_and_ready == 1'b1) && (oper == 3'b000)) ? reg_friet_p_round_rc_d : // Init State
+                                ((din_valid_and_ready == 1'b1) && (oper == 3'b111)) ? reg_friet_p_round_rc_d : // Reserved
+                                ((din_valid_and_ready == 1'b1) && ((oper == 3'b001) || (oper == 3'b010) || (oper == 3'b011) || (oper == 3'b100) || (oper == 3'b101) || (oper == 3'b110))) ? master_round_constant : // Absorb encryption, Absorb decryption, Squeeze and permute, Absorb directly, Absorb encryption no output, Absorb decryption no output
+                                {5{1'bx}}; // Unknown value
 
 generate
     genvar gen_j;
     for (gen_j = 0; gen_j < COMBINATIONAL_ROUNDS; gen_j = gen_j + 1) begin: all_combinational_rounds
+        (* dont_touch = "yes" *)
+        friet_p_round_fpga_lut6 friet_p_round_gen_j(
+            .state(friet_p_round_state[gen_j]),
+            .rc_c(friet_p_round_rc_c[gen_j]),
+            .rc_d(friet_p_round_rc_d[gen_j]),
+            .new_state(friet_p_round_new_state[gen_j])
+        );
         
-        friet_pc_round friet_pc_round_gen_j(
-            .state(friet_pc_round_state[gen_j]), 
-            .rc(friet_pc_round_rc[gen_j]), 
-            .new_state(friet_pc_round_new_state[gen_j])
-            );
-            
-        friet_p_rc friet_p_rc_gen_j(
-            .rc(friet_pc_round_rc[gen_j]),
-            .new_rc(friet_pc_round_new_rc[gen_j])
+        (* dont_touch = "yes" *)
+        friet_p_rc rc_c_gen_j(
+            .rc(friet_p_round_rc_c[gen_j]),
+            .new_rc(friet_p_round_new_rc_c[gen_j])
+        );
+        (* dont_touch = "yes" *)
+        friet_p_rc rc_d_gen_j(
+            .rc(friet_p_round_rc_d[gen_j]),
+            .new_rc(friet_p_round_new_rc_d[gen_j])
         );
         
         if(gen_j > 0) begin: all_combinational_rounds_next_iteration
-            assign friet_pc_round_state[gen_j] = friet_pc_round_new_state[gen_j-1];
-            assign friet_pc_round_rc[gen_j] = friet_pc_round_new_rc[gen_j-1];
+            assign friet_p_round_state[gen_j] = friet_p_round_new_state[gen_j-1];
+            assign friet_p_round_rc_c[gen_j]  = friet_p_round_new_rc_c[gen_j-1];
+            assign friet_p_round_rc_d[gen_j]  = friet_p_round_new_rc_d[gen_j-1];
         end
     end
 endgenerate
@@ -620,6 +671,37 @@ always @(*) begin
     end
 end
 
+assign computed_parity = reg_state[127:0] ^ reg_state[255:128] ^ reg_state[383:256] ^ reg_state[511:384];
+assign internal_new_fault_detected = (computed_parity != 128'b0) ? 1'b1 :
+                                     (computed_parity == 128'b0) ? 1'b0 :
+                                     1'bx;
+
+always @(*) begin
+    if(din_valid_and_ready == 1'b1) begin
+        case (oper)
+            // Absorb encryption, Absorb decryption, Squeeze and permute, Absorb none, Absorb encryption no output, Absorb decryption no output
+            3'b001, 3'b010, 3'b011, 3'b100, 3'b101, 3'b110 : begin
+                next_fault_detected = reg_fault_detected | internal_new_fault_detected;
+            end
+            // Init State
+            3'b000 : begin 
+                next_fault_detected = 1'b0;
+            end
+            // Reserved
+            3'b111 : begin 
+                next_fault_detected = reg_fault_detected | internal_new_fault_detected;
+            end
+            default : begin
+                next_fault_detected = 1'bx;
+            end
+        endcase
+    end else if(din_valid_and_ready == 1'b0) begin
+        next_fault_detected = reg_fault_detected | internal_new_fault_detected;
+    end else begin
+        next_fault_detected = 1'bx;
+    end
+end
+
 assign int_dout_valid = reg_has_data_out;
 
 assign din_ready = int_din_ready;
@@ -627,7 +709,8 @@ assign dout_valid = int_dout_valid;
 assign dout = reg_dout;
 assign dout_size = reg_dout_size;
 assign dout_last = reg_dout_last;
-
-/* verilator lint_on UNOPTFLAT */
+assign fault_detected = reg_fault_detected;
 
 endmodule
+
+/* verilator lint_on UNOPTFLAT */

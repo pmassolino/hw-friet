@@ -6,12 +6,15 @@
  and related or neighboring rights to the source code in this file.
  http://creativecommons.org/publicdomain/zero/1.0/
 */
+`default_nettype    none
+
+/* verilator lint_off UNOPTFLAT */
+
 module friet_pc_round
 (
     input wire [383:0] state,
     input wire [4:0] rc,
-    output wire [383:0] new_state,
-    output wire last_rc
+    output wire [383:0] new_state
 );
 
 wire [127:0] temp_a;
@@ -69,4 +72,6 @@ assign new_state[127:0]   = temp_new_a;
 assign new_state[255:128] = temp_new_b;
 assign new_state[383:256] = temp_new_c;
 
+
 endmodule
+/* verilator lint_on UNOPTFLAT */
